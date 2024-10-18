@@ -70,12 +70,11 @@ async fn main() -> Result<()> {
     let (tx, _rx) = broadcast::channel::<OutboundSocketMessage>(100);
     let tx = Arc::new(Mutex::new(tx));
 
-    let listener = TcpListener::bind(args.server).await.unwrap();
+    let listener = TcpListener::bind(args.server).await?;
     info!("WebSocket server is running on ws://{}", args.server);
 
     while let Ok((stream, _)) = listener.accept().await {
-        let tx = Arc::clone(&tx);
-        tokio::spawn(handle_connection(stream, tx));
+        tokio::spawn(handle_connection(stream, tx.clone()));
     }
 
     Ok(())
@@ -139,7 +138,9 @@ async fn handle_connection(
     while let Ok(message) = rx.recv().await {
         // if a destination name is set and does not match, do not forward the message
         if let Some(destination_name) = &message.destination_name {
-            if *destination_name.to_lowercase() != identity.name.to_lowercase() {
+            if *destination_name.to_lowercase() != identity.name.to_lowercase()
+                && message.sender_name.to_lowercase() != identity.name.to_lowercase()
+            {
                 continue;
             }
         }
