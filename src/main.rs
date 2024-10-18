@@ -32,6 +32,7 @@ struct FileMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 enum MessageType {
     ChatMessage(ChatMessage),
     FileMessage(FileMessage),
