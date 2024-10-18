@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{command, Parser};
 use futures::{SinkExt, StreamExt};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde_derive::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::broadcast;
@@ -39,8 +39,15 @@ enum MessageType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketMessage {
+struct InboundSocketMessage {
     destination_name: Option<String>,
+    content: MessageType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OutboundSocketMessage {
+    destination_name: Option<String>,
+    sender_name: String,
     content: MessageType,
 }
 
@@ -60,7 +67,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let (tx, _rx) = broadcast::channel::<SocketMessage>(100);
+    let (tx, _rx) = broadcast::channel::<OutboundSocketMessage>(100);
     let tx = Arc::new(Mutex::new(tx));
 
     let listener = TcpListener::bind(args.server).await.unwrap();
@@ -76,7 +83,7 @@ async fn main() -> Result<()> {
 
 async fn handle_connection(
     stream: TcpStream,
-    tx: Arc<Mutex<broadcast::Sender<SocketMessage>>>,
+    tx: Arc<Mutex<broadcast::Sender<OutboundSocketMessage>>>,
 ) -> Result<()> {
     let ws_stream = accept_async(stream)
         .await
@@ -96,14 +103,24 @@ async fn handle_connection(
         }
     };
 
+    let name = identity.name.clone().to_lowercase();
+
+    debug!("New connection from {}", name);
+
     let mut rx = tx.lock().await.subscribe();
 
     tokio::spawn(async move {
         while let Some(message) = ws_receiver.next().await {
             match message {
                 Ok(Message::Text(text)) => {
-                    let msg: SocketMessage = serde_json::from_str(&text)?;
-                    tx.lock().await.send(msg)?;
+                    let inbound_msg: InboundSocketMessage = serde_json::from_str(&text)?;
+                    let outbound_msg = OutboundSocketMessage {
+                        destination_name: inbound_msg.destination_name,
+                        sender_name: name.clone(),
+                        content: inbound_msg.content,
+                    };
+
+                    tx.lock().await.send(outbound_msg)?;
                 }
                 Ok(Message::Close(_)) => {
                     break;
@@ -121,8 +138,8 @@ async fn handle_connection(
 
     while let Ok(message) = rx.recv().await {
         // if a destination name is set and does not match, do not forward the message
-        if let Some(name) = &message.destination_name {
-            if *name != identity.name {
+        if let Some(destination_name) = &message.destination_name {
+            if *destination_name.to_lowercase() != identity.name.to_lowercase() {
                 continue;
             }
         }
